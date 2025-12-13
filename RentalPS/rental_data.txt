@@ -1,0 +1,20 @@
+5
+PlayStation 3
+0
+30000
+PlayStation 4
+5
+35000
+PlayStation 5
+3
+40000
+Nintendo Switch
+4
+45000
+Xbox
+4
+30000
+1
+PlayStation 3
+3
+365
