@@ -1,1 +1,152 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
+// --- Kredensial WiFi ---
+const char* ssid = "Wokwi-GUEST"; // Wi-Fi bawaan Wokwi (Kosongkan password)
+const char* password = "";
+
+// --- URL Web App Google Apps Script ---
+// Ganti dengan URL milikmu yang sudah kamu dapat dari Langkah 1
+const char* googleScriptUrl = "https://script.google.com/macros/s/AKfycbzBH-VNoh5wowtPQ9lp9eQrChGfsezKBAKfJNGg0IOfiNpK7WQC5kU0yoNFwR6-5ds/exec";
+
+// --- Definisikan Pin Hardware ---
+#define TRIG_PIN 33
+#define ECHO_PIN 32
+#define RELAY_TANAMAN 25 
+#define RELAY_TANDON 26   
+
+const int MOISTURE_MIN = 1500;   
+const float HEIGHT_MAX = 20.0;   
+
+LiquidCrystal_I2C lcd20x4(0x27, 20, 4); 
+LiquidCrystal_I2C lcd16x2(0x26, 16, 2); 
+
+// DATASET KELEMBAPAN TANAH
+int datasetMoisture[] = {
+  2500, 2400, 2200,
+  1400, 1100, 900, 
+  1300, 1800, 2800,
+  3800, 4000, 3900,
+  3200, 2700, 2000 
+};
+int totalData = sizeof(datasetMoisture) / sizeof(datasetMoisture[0]);
+int indexData = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(); 
+  
+  pinMode(RELAY_TANAMAN, OUTPUT);
+  pinMode(RELAY_TANDON, OUTPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  
+  digitalWrite(RELAY_TANAMAN, LOW);
+  digitalWrite(RELAY_TANDON, LOW);
+
+  lcd20x4.init();
+  lcd20x4.backlight();
+  lcd16x2.init();
+  lcd16x2.backlight();
+
+  // Menampilkan info koneksi WiFi di layar sementara
+  lcd20x4.clear();
+  lcd20x4.print("Connecting WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  lcd20x4.clear();
+  lcd20x4.print("WiFi Connected!");
+  delay(1500);
+}
+
+void loop() {
+  int currentMoisture = datasetMoisture[indexData];
+
+  // Membaca Jarak Ultrasonik
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  float currentHeight = duration * 0.034 / 2; 
+
+  // Logika Pompa Tanaman (Merah)
+  String statusTanaman = "OFF";
+  if (currentMoisture < MOISTURE_MIN) {
+    digitalWrite(RELAY_TANAMAN, HIGH);
+    statusTanaman = "ON ";
+  } else {
+    digitalWrite(RELAY_TANAMAN, LOW);
+    statusTanaman = "OFF";
+  }
+
+  // Logika Pompa Tandon (Hijau)
+  String statusTandon = "OFF";
+  if (currentHeight > HEIGHT_MAX) { 
+    digitalWrite(RELAY_TANDON, HIGH);
+    statusTandon = "ON ";
+  } else {
+    digitalWrite(RELAY_TANDON, LOW);
+    statusTandon = "OFF";
+  }
+
+  // Tampilkan di LCD 20x4
+  lcd20x4.setCursor(0, 0);
+  lcd20x4.print("--- MONITORING ---  ");
+  lcd20x4.setCursor(0, 1);
+  lcd20x4.print("H (Height) : "); lcd20x4.print(currentHeight, 1); lcd20x4.print(" cm  ");
+  lcd20x4.setCursor(0, 2);
+  lcd20x4.print("M (Moisture): "); lcd20x4.print(currentMoisture); lcd20x4.print("     ");
+  lcd20x4.setCursor(0, 3);
+  lcd20x4.print("P1(R):"); lcd20x4.print(statusTanaman);
+  lcd20x4.print("   P2(G):"); lcd20x4.print(statusTandon);
+
+  // Tampilkan di LCD 16x2
+  lcd16x2.setCursor(0, 0);
+  lcd16x2.print("DATASET REALTIME");
+  lcd16x2.setCursor(0, 1);
+  lcd16x2.print("Idx:"); lcd16x2.print(indexData + 1);
+  lcd16x2.print(" Val:"); lcd16x2.print(currentMoisture); lcd16x2.print("    ");
+
+  // --- MENGIRIM DATA KE CLOUD (GOOGLE SHEETS) ---
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure(); // Mengabaikan verifikasi sertifikat SSL untuk kemudahan ESP32
+    HTTPClient http;
+
+    http.begin(client, googleScriptUrl); // Mulai koneksi ke Google Apps Script
+    http.addHeader("Content-Type", "application/json"); //
+
+    // Format data menjadi JSON
+    String jsonPayload = "{\"height\":" + String(currentHeight, 1) + 
+                         ",\"moisture\":" + String(currentMoisture) + 
+                         ",\"p1_status\":\"" + statusTanaman + "\"" + 
+                         ",\"p2_status\":\"" + statusTandon + "\"}";
+
+    Serial.println("Mengirim data ke Google Sheets...");
+    int httpResponseCode = http.POST(jsonPayload); // Mengirim data via POST
+
+    if (httpResponseCode > 0) {
+      Serial.print("Respons Server: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Gagal Mengirim, Error: ");
+      Serial.println(http.errorToString(httpResponseCode).c_str());
+    }
+    http.end(); // Tutup koneksi
+  }
+
+  indexData++;
+  if (indexData >= totalData) {
+    indexData = 0; 
+  }
+
+  delay(5000); // Kirim data berkala setiap 5 detik
+}
